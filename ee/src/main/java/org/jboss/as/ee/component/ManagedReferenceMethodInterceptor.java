@@ -22,8 +22,12 @@
 
 package org.jboss.as.ee.component;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.jboss.as.naming.ManagedReference;
 import org.jboss.invocation.Interceptor;
@@ -36,6 +40,7 @@ import org.jboss.invocation.Interceptors;
 final class ManagedReferenceMethodInterceptor implements Interceptor {
     private final Object contextKey;
     private final Method method;
+    private MethodHandle mh;
 
     ManagedReferenceMethodInterceptor(final Object contextKey, final Method method) {
         this.contextKey = contextKey;
@@ -45,17 +50,49 @@ final class ManagedReferenceMethodInterceptor implements Interceptor {
     /**
      * {@inheritDoc}
      */
+    /* This is a hacky implementation to demonstrate switching virtual method lookup from
+     * Reflection to MethodHandle.
+     */
     public Object processInvocation(final InterceptorContext context) throws Exception {
         final ManagedReference reference = (ManagedReference) context.getPrivateData(ComponentInstance.class).getInstanceData(contextKey);
         final Object instance = reference.getInstance();
+        final Object[] params = context.getParameters();
         try {
-            return method.invoke(instance, context.getParameters());
+            if (mh == null)
+            {
+               final Object o = method.invoke(instance, params);
+               mh = MethodHandles.lookup().unreflect(method);
+               return o;
+            }
+            else
+            {
+               if (params != null && params.length > 0)
+               {
+                   final List<Object> mtParams = new ArrayList<>(params.length + 1);
+                   mtParams.add(instance);
+                   for (Object o:params) {
+                      mtParams.add(o);
+                   }
+                   return mh.invokeWithArguments(mtParams);
+               } else {
+                   return mh.invoke(instance);
+               }
+            }
         } catch (IllegalAccessException e) {
             final IllegalAccessError n = new IllegalAccessError(e.getMessage());
             n.setStackTrace(e.getStackTrace());
             throw n;
         } catch (InvocationTargetException e) {
-            throw Interceptors.rethrow(e.getCause());
+           throw Interceptors.rethrow(e.getCause());
+        } catch (Throwable t) {
+           final Throwable cause = t.getCause();
+           if (cause != null)
+           {
+              throw new Exception(cause.getMessage(), cause);
+           } else
+           {
+              throw new Exception(t.getClass().getName()+":"+t.getMessage() );
+           }
         }
     }
 }
